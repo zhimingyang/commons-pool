@@ -94,8 +94,12 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
      * Create a new <code>GenericObjectPool</code> using a specific
      * configuration.
      *
+     *
+     * factory用来给对象池创建对象
      * @param factory   The object factory to be used to create object instances
      *                  used by this pool
+     *
+     * 对相应的对象池进行配置
      * @param config    The configuration to use for this pool instance. The
      *                  configuration is used by value. Subsequent changes to
      *                  the configuration object will not be reflected in the
@@ -110,16 +114,21 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
             jmxUnregister(); // tidy up
             throw new IllegalArgumentException("factory may not be null");
         }
+
         this.factory = factory;
-
+        //初始化空闲对象池,传入锁的模式，公平还是非公平
         idleObjects = new LinkedBlockingDeque<PooledObject<T>>(config.getFairness());
-
+        //参数设置
         setConfig(config);
-
+        //开启淘汰机制,timeBetweenEvictionRunsMillis为淘汰的间隔
         startEvictor(getTimeBetweenEvictionRunsMillis());
     }
 
     /**
+     *
+     * 创建一个GenericObjectPool,利用GenericObjectPoolConfig和factory
+     *
+     *
      * Create a new <code>GenericObjectPool</code> that tracks and destroys
      * objects that are checked out, but never returned to the pool.
      *
@@ -422,6 +431,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
 
         // Get local copy of current config so it is consistent for entire
         // method execution
+        //当资源池耗尽的时候是否阻塞住
         final boolean blockWhenExhausted = getBlockWhenExhausted();
 
         boolean create;
@@ -429,8 +439,8 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
 
         while (p == null) {
             create = false;
-            p = idleObjects.pollFirst();
-            if (p == null) {
+            p = idleObjects.pollFirst();//弹出一个对象
+            if (p == null) {//如果为空，那么新创建
                 p = create();
                 if (p != null) {
                     create = true;
@@ -716,28 +726,32 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
      * <p>
      * Successive activations of this method examine objects in sequence,
      * cycling through objects in oldest-to-youngest order.
+     *
+     * 进行空闲连接的淘汰
      */
     @Override
     public void evict() throws Exception {
         assertOpen();
-
+        //判断空闲的线程池是否为空,为空那么不进行淘汰
         if (idleObjects.size() > 0) {
-
             PooledObject<T> underTest = null;
+            //获取淘汰策略，默认是DefaultEvictionPolicy
             final EvictionPolicy<T> evictionPolicy = getEvictionPolicy();
 
             synchronized (evictionLock) {
                 final EvictionConfig evictionConfig = new EvictionConfig(
-                        getMinEvictableIdleTimeMillis(),
+                        getMinEvictableIdleTimeMillis(),//最小的空闲时间
                         getSoftMinEvictableIdleTimeMillis(),
-                        getMinIdle());
-
+                        getMinIdle());//最小的空闲数
+                //是否对空闲的连接进行Test
                 final boolean testWhileIdle = getTestWhileIdle();
-
+                //getNumTests为一次淘汰策略的运行扫描多少对象
                 for (int i = 0, m = getNumTests(); i < m; i++) {
+                    //是否要创建淘汰的迭代器
                     if (evictionIterator == null || !evictionIterator.hasNext()) {
                         evictionIterator = new EvictionIterator(idleObjects);
                     }
+                    //如果当前的迭代器是空的，那么证明当前的空闲对象池已经用光了，那么不进行淘汰
                     if (!evictionIterator.hasNext()) {
                         // Pool exhausted, nothing to do here
                         return;
@@ -752,7 +766,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                         evictionIterator = null;
                         continue;
                     }
-
+                    //将当前的空闲的连接设置为淘汰状态
                     if (!underTest.startEvictionTest()) {
                         // Object was borrowed in another thread
                         // Don't count this as an eviction test so reduce i;
@@ -775,14 +789,15 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                         // Don't evict on error conditions
                         evict = false;
                     }
-
+                    //如果需要淘汰，那么执行淘汰逻辑
                     if (evict) {
                         destroy(underTest);
                         destroyedByEvictorCount.incrementAndGet();
-                    } else {
+                    } else {//如果不需要淘汰，判断是否进行对象有效期的校验
                         if (testWhileIdle) {
                             boolean active = false;
                             try {
+                                //对对象进行初始化设置
                                 factory.activateObject(underTest);
                                 active = true;
                             } catch (final Exception e) {
@@ -790,11 +805,13 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                                 destroyedByEvictorCount.incrementAndGet();
                             }
                             if (active) {
+                                //对对象的有效性进行检测
                                 if (!factory.validateObject(underTest)) {
                                     destroy(underTest);
                                     destroyedByEvictorCount.incrementAndGet();
                                 } else {
                                     try {
+
                                         factory.passivateObject(underTest);
                                     } catch (final Exception e) {
                                         destroy(underTest);
@@ -842,6 +859,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
      * @throws Exception if the object factory's {@code makeObject} fails
      */
     private PooledObject<T> create() throws Exception {
+        //获取最大的对象数
         int localMaxTotal = getMaxTotal();
         // This simplifies the code later in this method
         if (localMaxTotal < 0) {
@@ -854,19 +872,26 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
         // - null:  loop and re-test the condition that determines whether to
         //          call the factory
         Boolean create = null;
+        //这里采用while去做创建和JDK的线程池实现类似
         while (create == null) {
             synchronized (makeObjectCountLock) {
+                //增加创建数
                 final long newCreateCount = createCount.incrementAndGet();
+                //和最大的对象数想比较
                 if (newCreateCount > localMaxTotal) {
+                    //如果超限,回滚下
                     // The pool is currently at capacity or in the process of
                     // making enough new objects to take it to capacity.
+                    //减小创建数
                     createCount.decrementAndGet();
+                    //正在创建的Object数目，正在创建的为0，那么也就不用等待了
                     if (makeObjectCount == 0) {
                         // There are no makeObject() calls in progress so the
                         // pool is at capacity. Do not attempt to create a new
                         // object. Return and wait for an object to be returned
                         create = Boolean.FALSE;
                     } else {
+                        //如果正在创建的对象数不为0，意味着目前可能对象池还没有用超限，并且有失败的，那么进行重试
                         // There are makeObject() calls in progress that might
                         // bring the pool to capacity. Those calls might also
                         // fail so wait until they complete and then re-test if
@@ -874,17 +899,19 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                         makeObjectCountLock.wait();
                     }
                 } else {
+                    //创建新对象
                     // The pool is not at capacity. Create a new object.
                     makeObjectCount++;
                     create = Boolean.TRUE;
                 }
             }
         }
-
+        //如果没有新的对象创建，那么返回
         if (!create.booleanValue()) {
             return null;
         }
 
+        //创建新对象
         final PooledObject<T> p;
         try {
             p = factory.makeObject();
@@ -892,6 +919,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
             createCount.decrementAndGet();
             throw e;
         } finally {
+            //释放锁，并且唤醒其他的创建线程
             synchronized (makeObjectCountLock) {
                 makeObjectCount--;
                 makeObjectCountLock.notifyAll();
@@ -902,8 +930,9 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
         if (ac != null && ac.getLogAbandoned()) {
             p.setLogAbandoned(true);
         }
-
+        //增加创建的数量
         createdCount.incrementAndGet();
+        //将新创建的对象添加到Map中
         allObjects.put(new IdentityWrapper<T>(p.getObject()), p);
         return p;
     }

@@ -716,6 +716,8 @@ public abstract class BaseGenericObjectPool<T> extends BaseObject {
      * See POOL-195.</p>
      *
      * @param delay time in milliseconds before start and between eviction runs
+     *
+     * 进行同步控制保证evictor为单例
      */
     final void startEvictor(final long delay) {
         synchronized (evictionLock) {
@@ -726,6 +728,7 @@ public abstract class BaseGenericObjectPool<T> extends BaseObject {
             }
             if (delay > 0) {
                 evictor = new Evictor();
+                //开启淘汰任务
                 EvictionTimer.schedule(evictor, delay, delay);
             }
         }
@@ -1035,7 +1038,7 @@ public abstract class BaseGenericObjectPool<T> extends BaseObject {
 
     /**
      * The idle object evictor {@link TimerTask}.
-     *
+     * 空闲对象的淘汰任务
      * @see GenericKeyedObjectPool#setTimeBetweenEvictionRunsMillis
      */
     class Evictor extends TimerTask {
@@ -1049,6 +1052,7 @@ public abstract class BaseGenericObjectPool<T> extends BaseObject {
          */
         @Override
         public void run() {
+            //创建class Loader 来保证对象是在一个ClassLoader中
             final ClassLoader savedClassLoader =
                     Thread.currentThread().getContextClassLoader();
             try {
@@ -1067,6 +1071,7 @@ public abstract class BaseGenericObjectPool<T> extends BaseObject {
 
                 // Evict from the pool
                 try {
+                    //进行淘汰
                     evict();
                 } catch(final Exception e) {
                     swallowException(e);
