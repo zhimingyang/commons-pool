@@ -440,38 +440,46 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
         while (p == null) {
             create = false;
             p = idleObjects.pollFirst();//弹出一个对象
-            if (p == null) {//如果为空，那么新创建
+            if (p == null) {//如果为空，那么新创建,这里也可能创建成功，也可能创建失败
                 p = create();
                 if (p != null) {
                     create = true;
                 }
             }
+            //如果空闲对象耗尽的情况下是否阻塞等待
             if (blockWhenExhausted) {
                 if (p == null) {
+                    //没有设置超时时间的话，那么利用take阻塞到有资源为止
                     if (borrowMaxWaitMillis < 0) {
                         p = idleObjects.takeFirst();
                     } else {
+                        //等待borrowMaxWaitMillis
                         p = idleObjects.pollFirst(borrowMaxWaitMillis,
                                 TimeUnit.MILLISECONDS);
                     }
                 }
                 if (p == null) {
+                    //超时未获取，抛出获取不到的异常
                     throw new NoSuchElementException(
                             "Timeout waiting for idle object");
                 }
             } else {
+                //如果耗尽的时候不阻塞等待，那么直接抛出异常
                 if (p == null) {
                     throw new NoSuchElementException("Pool exhausted");
                 }
             }
+            //判断当前的对象的状态是否为idle
             if (!p.allocate()) {
                 p = null;
             }
-
+            //如果获取到对象，那么进行对象的一系列的校验等操作
             if (p != null) {
                 try {
+                    //激活对象
                     factory.activateObject(p);
                 } catch (final Exception e) {
+                    //异常则执行销毁操作
                     try {
                         destroy(p);
                     } catch (final Exception e1) {
@@ -485,15 +493,18 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                         throw nsee;
                     }
                 }
+                //这里主要是获取testOnBorrow和testOnCreate,那么在对象是从idle池中取出来的或者是新创建的要进行Test
                 if (p != null && (getTestOnBorrow() || create && getTestOnCreate())) {
                     boolean validate = false;
                     Throwable validationThrowable = null;
                     try {
+                        //检测有效性
                         validate = factory.validateObject(p);
                     } catch (final Throwable t) {
                         PoolUtils.checkRethrow(t);
                         validationThrowable = t;
                     }
+                    //如果无效的话进行销毁操作
                     if (!validate) {
                         try {
                             destroy(p);
@@ -512,7 +523,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                 }
             }
         }
-
+        //更新一些统计信息
         updateStatsBorrow(p, System.currentTimeMillis() - waitTime);
 
         return p.getObject();
@@ -534,6 +545,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
      */
     @Override
     public void returnObject(final T obj) {
+        //从ConcurrentHashMap中获取相应的PooledObject
         final PooledObject<T> p = allObjects.get(new IdentityWrapper<T>(obj));
 
         if (p == null) {
@@ -546,15 +558,17 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
 
         synchronized(p) {
             final PooledObjectState state = p.getState();
+            //确定返回的对象都是ALLOCATED状态的
             if (state != PooledObjectState.ALLOCATED) {
                 throw new IllegalStateException(
                         "Object has already been returned to this pool or is invalid");
             }
+            //将状态设置为RETURNING
             p.markReturning(); // Keep from being marked abandoned
         }
 
         final long activeTime = p.getActiveTimeMillis();
-
+        //判断在对象返回的时候是否需要Test
         if (getTestOnReturn()) {
             if (!factory.validateObject(p)) {
                 try {
@@ -571,7 +585,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                 return;
             }
         }
-
+        //钝化
         try {
             factory.passivateObject(p);
         } catch (final Exception e1) {
@@ -589,13 +603,14 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
             updateStatsReturn(activeTime);
             return;
         }
-
+        //将对象状态设置为IDLE
         if (!p.deallocate()) {
             throw new IllegalStateException(
                     "Object has already been returned to this pool or is invalid");
         }
-
+        //获取最大的空闲的对象池大小
         final int maxIdleSave = getMaxIdle();
+        //如果对象池Close，或者超限了，那么直接销毁对象
         if (isClosed() || maxIdleSave > -1 && maxIdleSave <= idleObjects.size()) {
             try {
                 destroy(p);
@@ -603,11 +618,13 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                 swallowException(e);
             }
         } else {
+            //进行空闲对象入队，这里主要是判断是否是FIFO的模式
             if (getLifo()) {
                 idleObjects.addFirst(p);
             } else {
                 idleObjects.addLast(p);
             }
+            //如果close了，那么清理所有对象
             if (isClosed()) {
                 // Pool closed while object was being added to idle objects.
                 // Make sure the returned object is destroyed rather than left
@@ -919,7 +936,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
             createCount.decrementAndGet();
             throw e;
         } finally {
-            //释放锁，并且唤醒其他的创建线程
+            //释放锁，并且唤醒其他的等待线程，表明当前已经有线程创建好了对象了
             synchronized (makeObjectCountLock) {
                 makeObjectCount--;
                 makeObjectCountLock.notifyAll();
