@@ -756,6 +756,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
             final EvictionPolicy<T> evictionPolicy = getEvictionPolicy();
 
             synchronized (evictionLock) {
+                //淘汰的配置设置
                 final EvictionConfig evictionConfig = new EvictionConfig(
                         getMinEvictableIdleTimeMillis(),//最小的空闲时间
                         getSoftMinEvictableIdleTimeMillis(),
@@ -783,7 +784,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                         evictionIterator = null;
                         continue;
                     }
-                    //将当前的空闲的连接设置为淘汰状态
+                    //将当前的空闲的连接设置为淘汰状态,不为空闲则重新迭代出一个
                     if (!underTest.startEvictionTest()) {
                         // Object was borrowed in another thread
                         // Don't count this as an eviction test so reduce i;
@@ -796,6 +797,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                     // killing the eviction thread.
                     boolean evict;
                     try {
+                        //根据淘汰策略判断是否需要淘汰
                         evict = evictionPolicy.evict(evictionConfig, underTest,
                                 idleObjects.size());
                     } catch (final Throwable t) {
@@ -814,7 +816,7 @@ public class GenericObjectPool<T> extends BaseGenericObjectPool<T>
                         if (testWhileIdle) {
                             boolean active = false;
                             try {
-                                //对对象进行初始化设置
+                                //对对象进行激活
                                 factory.activateObject(underTest);
                                 active = true;
                             } catch (final Exception e) {
